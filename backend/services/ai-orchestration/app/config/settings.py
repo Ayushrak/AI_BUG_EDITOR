@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     groq_model: str = "mixtral-8x7b-32768"
     groq_temperature: float = 0.7
     groq_max_tokens: int = 2048
+    # Use a mock mode for development/testing (no real calls)
+    groq_use_mock: bool = False
+    # Optional: custom Groq API base URL
+    groq_api_url: str = "https://api.groq.ai"
     
     # Redis
     redis_url: str = "redis://:redis@localhost:6379"
