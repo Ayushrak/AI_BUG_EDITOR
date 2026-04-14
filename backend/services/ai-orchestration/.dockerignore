@@ -1,0 +1,53 @@
+# .dockerignore - Reduce build context size
+
+# Version control
+.git
+.gitignore
+.github
+
+# Build outputs
+dist
+build
+*.egg-info
+__pycache__
+*.pyc
+*.pyo
+
+# Dependencies
+venv
+.venv
+env
+*.req
+
+# Configuration
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+.pytest_cache
+
+# Testing
+coverage
+.coverage
+htmlcov
+
+# Documentation
+README.md
+docs
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.circleci
+Jenkinsfile
+
+# Other
+.editorconfig
+.prettierignore

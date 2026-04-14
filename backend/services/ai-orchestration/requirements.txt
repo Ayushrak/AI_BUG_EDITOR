@@ -1,0 +1,41 @@
+fastapi==0.109.0
+uvicorn==0.27.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# LangGraph & LLM
+langgraph==0.0.46
+langchain==0.1.11
+langchain-groq==0.1.0
+langchain-text-splitters==0.0.1
+
+# Data Processing
+numpy==1.26.3
+pandas==2.1.4
+
+# Async
+httpx==0.25.2
+aioredis==2.0.1
+
+# Database
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+
+# Message Queue
+aiokafka==0.10.0
+
+# Utilities
+python-multipart==0.0.6
+pyyaml==6.0.1
+tenacity==8.2.3
+
+# Development
+pytest==7.4.4
+pytest-asyncio==0.23.2
+black==23.12.1
+flake8==6.1.0
+mypy==1.8.0
+
+# Production
+gunicorn==21.2.0

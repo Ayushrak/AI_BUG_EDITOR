@@ -1,0 +1,2 @@
+# CodeGuardian AI - Notification Service
+# NestJS microservice for handling notifications (Slack, Email, GitHub, Webhooks)

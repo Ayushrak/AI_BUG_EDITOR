@@ -1,0 +1,339 @@
+version: "3.8"
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: codeguardian-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-codeguardian}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./backend/database/init.sql:/docker-entrypoint-initdb.d/02-init.sql
+    networks:
+      - codeguardian-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: codeguardian-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - codeguardian-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Apache Kafka (for event streaming)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: codeguardian-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - codeguardian-network
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: codeguardian-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - codeguardian-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "kafka-broker-api-versions.sh",
+          "--bootstrap-server",
+          "localhost:9092",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # MinIO (S3-compatible object storage for local development)
+  minio:
+    image: minio/minio:latest
+    container_name: codeguardian-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-minioadmin}
+    command: minio server /data --console-address ":9001"
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - codeguardian-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # API Gateway (NestJS)
+  api-gateway:
+    build:
+      context: ./backend/services/api-gateway
+      dockerfile: Dockerfile
+    container_name: codeguardian-api-gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${API_GATEWAY_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-codeguardian}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379
+      KAFKA_BROKERS: kafka:29092
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-change-this}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    networks:
+      - codeguardian-network
+    restart: unless-stopped
+    # Uncomment for development with hot-reload
+    # volumes:
+    #   - ./backend/services/api-gateway/src:/app/src
+    # command: npm run start:dev
+
+  # Auth Service (NestJS)
+  auth-service:
+    build:
+      context: ./backend/services/auth
+      dockerfile: Dockerfile
+    container_name: codeguardian-auth-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-codeguardian}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-change-this}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+      SERVICE_PORT: 3001
+    networks:
+      - codeguardian-network
+    restart: unless-stopped
+
+  # Upload Service (NestJS)
+  upload-service:
+    build:
+      context: ./backend/services/upload
+      dockerfile: Dockerfile
+    container_name: codeguardian-upload-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "3002:3002"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-codeguardian}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USER: ${MINIO_USER:-minioadmin}
+      MINIO_PASSWORD: ${MINIO_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-codeguardian-uploads}
+      KAFKA_BROKERS: kafka:29092
+      SERVICE_PORT: 3002
+    networks:
+      - codeguardian-network
+    restart: unless-stopped
+
+  # Analysis Service (NestJS)
+  analysis-service:
+    build:
+      context: ./backend/services/analysis
+      dockerfile: Dockerfile
+    container_name: codeguardian-analysis-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "3003:3003"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-codeguardian}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379
+      KAFKA_BROKERS: kafka:29092
+      SERVICE_PORT: 3003
+    networks:
+      - codeguardian-network
+    restart: unless-stopped
+
+  # AI Orchestration Service (Python FastAPI)
+  ai-orchestration:
+    build:
+      context: ./backend/services/ai-orchestration
+      dockerfile: Dockerfile
+    container_name: codeguardian-ai-service
+    depends_on:
+      - redis
+      - kafka
+    ports:
+      - "${AI_SERVICE_PORT:-8000}:8000"
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379
+      KAFKA_BROKERS: kafka:29092
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ENVIRONMENT: ${NODE_ENV:-development}
+    networks:
+      - codeguardian-network
+    restart: unless-stopped
+    # Uncomment for development
+    # volumes:
+    #   - ./backend/services/ai-orchestration/src:/app/src
+
+  # Report Service (NestJS)
+  report-service:
+    build:
+      context: ./backend/services/report
+      dockerfile: Dockerfile
+    container_name: codeguardian-report-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "3004:3004"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-codeguardian}
+      KAFKA_BROKERS: kafka:29092
+      SERVICE_PORT: 3004
+    networks:
+      - codeguardian-network
+    restart: unless-stopped
+
+  # Notification Service (NestJS)
+  notification-service:
+    build:
+      context: ./backend/services/notification
+      dockerfile: Dockerfile
+    container_name: codeguardian-notification-service
+    depends_on:
+      - kafka
+      - redis
+    ports:
+      - "3005:3005"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      KAFKA_BROKERS: kafka:29092
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      SERVICE_PORT: 3005
+    networks:
+      - codeguardian-network
+    restart: unless-stopped
+
+  # Chat Service (NestJS)
+  chat-service:
+    build:
+      context: ./backend/services/chat
+      dockerfile: Dockerfile
+    container_name: codeguardian-chat-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3006:3006"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-codeguardian}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      AI_SERVICE_URL: http://ai-orchestration:8000
+      SERVICE_PORT: 3006
+    networks:
+      - codeguardian-network
+    restart: unless-stopped
+
+  # Frontend (Next.js) - Optional, can run separately
+  # Uncomment if you want to run frontend in docker
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: codeguardian-frontend
+  #   depends_on:
+  #     - api-gateway
+  #   ports:
+  #     - "3001:3000"
+  #   environment:
+  #     NEXT_PUBLIC_API_URL: http://localhost:3000
+  #   networks:
+  #     - codeguardian-network
+  #   restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  codeguardian-network:
+    driver: bridge
