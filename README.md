@@ -76,3 +76,20 @@ Specify your license (e.g., MIT). Add a `LICENSE` file at project root.
 ## Contact
 
 Project maintainers and contact details can be added here.
+
+## Architecture
+
+Below is a high-level architecture overview for the AI-Based Bug Detector. Add the actual diagrams/screenshots to `docs/images/`.
+
+- `docs/images/architecture.png`: high-level system architecture showing frontend, API gateway, microservices (analysis, auth, chat, notification), AI orchestration, and storage.
+- `docs/images/prs-dashboard.png`: example dashboard / pull-request risk view used by the analysis pipeline (screenshot provided).
+
+![AI Bug Detector Architecture](docs/images/architecture.png)
+
+Figure: High-level architecture of AI-Based Bug Detector.
+
+![Pull Requests Dashboard](docs/images/prs-dashboard.png)
+
+Figure: Example PR risk & quality dashboard produced by the analysis pipeline.
+
+If you have images (PNG, JPG), place them in `docs/images/` with the names above and they will show up on GitHub.
